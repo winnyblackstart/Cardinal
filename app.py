@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory, Response
-import os, json, datetime, time, subprocess, queue, threading
+import os, json, datetime, time, queue, threading, multiprocessing
 from subprocess import Popen, PIPE
+from collections import deque
 
 app = Flask(__name__, static_url_path='', static_folder='static')
 
@@ -60,7 +61,7 @@ def new_chat():
         json.dump({"title": "", "messages": []}, f, ensure_ascii=False)
     return jsonify({'session_id': session_file})
 
-import re  # add this import if not already present
+
 
 @app.route('/api/chat', methods=['POST'])
 def chat_api():
@@ -68,79 +69,123 @@ def chat_api():
     model = data.get('model')
     session_id = data.get('session_id')
     message = data.get('message')
-    if not model or not session_id or not message:
-        return jsonify({'error': 'Missing parameters'}), 400
-    if os.path.exists(session_id):
-        with open(session_id, 'r', encoding='utf-8') as f:
-            session_data = json.load(f)
-    else:
-        session_data = {"title": "", "messages": []}
-    if session_data.get("title", "") == "" and len(session_data.get("messages", [])) == 0:
-        session_data["title"] = " ".join(message.split()[:5])
-    session_data.setdefault("messages", []).append({'sender': 'user', 'text': message})
     
+    # Validate parameters
+    if not all([model, session_id, message]):
+        return jsonify({'error': 'Missing parameters'}), 400
+
+    # Session management
+    session_data = load_session(session_id)
+    update_session(session_data, message)
+
+    # Model handling
     models = load_models()
     model_command = models.get(model)
     if not model_command:
-        bot_response = "Model command not found."
-        session_data["messages"].append({'sender': 'bot', 'text': bot_response})
-        with open(session_id, 'w', encoding='utf-8') as f:
-            json.dump(session_data, f, ensure_ascii=False)
-        return jsonify({'response': bot_response})
-    process = Popen(model_command.split(),
-                               stdin=PIPE,
-                               stdout=PIPE,
-                               stderr=PIPE,
-                               encoding='utf-8',
-                               bufsize=0)
+        return handle_model_error(session_id, session_data, "Model command not found")
+
+    # Process execution
+    process = Popen(
+        model_command.split(),
+        stdin=PIPE,
+        stdout=PIPE,
+        stderr=PIPE,
+        encoding='utf-8',
+        bufsize=1  # Line-buffered
+    )
+    
+    # Send input
     process.stdin.write(message + "\n")
     process.stdin.flush()
     process.stdin.close()
+
+    # Response streaming
     def generate():
         bot_response = ""
         q = queue.Queue()
-    
+        error_chunks = []
+
+        # stdout reader
         def stream_output():
             try:
                 while True:
-                # Read larger chunks to capture all output
-                    chunk = process.stdout.read(15)
+                    chunk = process.stdout.read(1)
                     if not chunk:
                         break
-                    for char in chunk:
-                        q.put(char)
+                    q.put(chunk)
             finally:
-                q.put(None)  # Signal end of stream
-    
-        t = threading.Thread(target=stream_output)
-        t.start()
-    
+                q.put(None)
+
+        # stderr reader
+        def stream_stderr():
+            while True:
+                chunk = process.stderr.read(1)
+                if not chunk:
+                    break
+
+        # Start threads
+        stdout_thread = threading.Thread(target=stream_output)
+        stderr_thread = threading.Thread(target=stream_stderr)
+        stdout_thread.start()
+        stderr_thread.start()
+
         try:
             while True:
                 try:
-                    char = q.get(timeout=10)  # Increased timeout
-                    if char is None:
+                    chunk = q.get(timeout=1)
+                    if chunk is None:
                         break
-                    bot_response += char
-                    yield char
+                    bot_response += chunk
+                    yield chunk
                 except queue.Empty:
                     if process.poll() is not None:
+                        # Process exited, check for final output
+                        final_output = process.stdout.read()
+                        if final_output:
+                            bot_response += final_output
+                            yield final_output
                         break
         finally:
-            t.join()
+            # Cleanup and finalization
+            stdout_thread.join()
+            stderr_thread.join()
             process.wait()
-        # Handle remaining output after process exits
-            remaining = process.stdout.read()
-            if remaining:
-                for char in remaining:
-                    bot_response += char
-                    yield char
-        # Save final response
+
+            # Handle errors
+            if error_chunks:
+                error_msg = ''.join(error_chunks)
+                bot_response += f"\n[ERROR: {error_msg}]"
+                yield f"\n[ERROR: {error_msg}]"
+
+            # Save final response
             session_data["messages"].append({'sender': 'bot', 'text': bot_response})
-            with open(session_id, 'w', encoding='utf-8') as f:
-                json.dump(session_data, f, ensure_ascii=False)
-        print(bot_response)
+            save_session(session_id, session_data)
+
+        print(f"Final response: {bot_response}")
+
     return Response(generate(), mimetype='text/plain; charset=utf-8')
+
+
+# Helper functions
+def load_session(session_id):
+    if os.path.exists(session_id):
+        with open(session_id, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"title": "", "messages": []}
+
+def update_session(session_data, message):
+    if not session_data.get("title") and not session_data.get("messages"):
+        session_data["title"] = " ".join(message.split()[:5])
+    session_data.setdefault("messages", []).append({'sender': 'user', 'text': message})
+
+def handle_model_error(session_id, session_data, message):
+    session_data["messages"].append({'sender': 'bot', 'text': message})
+    save_session(session_id, session_data)
+    return jsonify({'response': message})
+
+def save_session(session_id, session_data):
+    with open(session_id, 'w', encoding='utf-8') as f:
+        json.dump(session_data, f, ensure_ascii=False)
 
 
 @app.route('/api/chats', methods=['GET'])
