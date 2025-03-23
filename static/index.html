@@ -7,11 +7,11 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
   <style>
     body { display: flex; overflow-y: hidden; margin: 0; font-family: Arial, sans-serif; }
-    .sidebar { width: 250px; background: #1e1e2e; color: white; padding: 15px; height: 100vh; overflow-y: auto; }
+    .sidebar { width: 250px; background: #07071b; color: white; padding: 15px; height: 100vh; overflow-y: auto; }
     .sidebar button { width: 40%; background: #3b3b4f; border: none; padding: 10px; margin: 5px 10px; color: white; cursor: pointer; text-align: left; }
     .sidebar button:hover { background: #57576a; }
-    .chat-container { flex: 1; display: flex; overflow-y: visible; background: rgba(0, 0, 0, 0.6); scrollbar-width: thin; flex-direction: column; height: 105vh; background: #282c34; color: white; }
-    .chat-header { padding: 15px; background: #20232a; }
+    .chat-container { flex: 1; display: flex; overflow-y: visible; background: rgba(0, 0, 0, 0.6); scrollbar-width: thin; flex-direction: column; height: 105vh; background: #090a09; color: white; }
+    .chat-header { padding: 15px; background: #1b1e23; }
     .chat-box { flex: 1; padding: 15px; overflow-y: auto; }
     .chat-input { display: flex; padding: 15px; background: #20232a; }
     .chat-input textarea { flex: 1; padding: 10px; border: none; outline: none; border-radius: 5px; }
@@ -32,6 +32,7 @@
     .copy-button::before {content: "📋"; font-size: 13px;}
     .code-block-container:hover .copy-button {display: flex;}
     .code-block-container:hover .copy-button {display: block;}
+    .chat-history-item button {background: none;}
 
   </style>
   <script>
